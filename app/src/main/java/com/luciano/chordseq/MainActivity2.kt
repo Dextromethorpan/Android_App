@@ -1,0 +1,523 @@
+package com.luciano.chordseq
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  MainActivity2.kt — App 2: Melody to Chords
+//  ChordsPro · Luciano Muratore
+//
+//  Pipeline:
+//    User hums → PitchDetector (YIN) → note list
+//    → MelodyHarmonizer → seed chords
+//    → ChordSeqAIRunner (ONNX) → 4-chord progression
+//    → ChordDeriver → 7 instrument tracks
+//    → UI cards
+// ═════════════════════════════════════════════════════════════════════════════
+
+import android.Manifest
+import android.app.AlertDialog
+import android.content.pm.PackageManager
+import android.graphics.*
+import android.os.Bundle
+import android.util.Log
+import android.util.TypedValue
+import android.view.*
+import android.widget.*
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+class MainActivity2 : AppCompatActivity() {
+
+    private lateinit var pitchDetector    : PitchDetector
+    private lateinit var chordSeqRunner   : ChordSeqAIRunner
+
+    private var selectedKey    = "C"
+    private var selectedGenre  = "Jazz"
+    private var selectedDecade = "1960s"
+    private var detectedNotes  = listOf<String>()
+    private var isRecording    = false
+
+    // UI refs
+    private lateinit var tvSelectedKey   : TextView
+    private lateinit var tvDetectedNotes : TextView
+    private lateinit var tvKeyWarning    : TextView
+    private lateinit var tvStatus        : TextView
+    private lateinit var btnRecord       : TextView
+    private lateinit var btnGenerate     : TextView
+    private lateinit var tracksSection   : LinearLayout
+
+    // 7-track TextViews
+    private lateinit var tvBass          : TextView
+    private lateinit var tvRhythmGuitar  : TextView
+    private lateinit var tvPiano         : TextView
+    private lateinit var tvPads          : TextView
+    private lateinit var tvLead          : TextView
+    private lateinit var tvCounter       : TextView
+    private lateinit var tvPercussion    : TextView
+
+    private val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
+    private val WRAP  = ViewGroup.LayoutParams.WRAP_CONTENT
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        buildUI()
+
+        pitchDetector = PitchDetector(this)
+        chordSeqRunner = ChordSeqAIRunner(this)
+
+        tvStatus.text = "Loading model…"
+        lifecycleScope.launch {
+            runCatching { chordSeqRunner.load() }
+                .onSuccess  { tvStatus.text = "Ready ✓" }
+                .onFailure  { tvStatus.text = "Model load failed" }
+        }
+
+        if (!pitchDetector.hasPermission()) {
+            ActivityCompat.requestPermissions(this,
+                arrayOf(Manifest.permission.RECORD_AUDIO), 201)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        chordSeqRunner.close()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 201 && grantResults.firstOrNull() != PackageManager.PERMISSION_GRANTED) {
+            tvDetectedNotes.text = "Microphone permission denied"
+        }
+    }
+
+    // ── UI construction ───────────────────────────────────────────────────────
+
+    private fun buildUI() {
+        val scroll = ScrollView(this).apply { setBackgroundColor(C.BG_WRAP) }
+        val screen = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(C.BG_SCREEN)
+        }
+
+        screen.addView(buildTopBar())
+        screen.addView(hDivider())
+        screen.addView(buildKeySelector())
+        screen.addView(hDivider())
+        screen.addView(buildStylePickers())
+        screen.addView(hDivider())
+        screen.addView(buildRecordSection())
+        screen.addView(hDivider())
+        screen.addView(buildTracksSection())
+
+        scroll.addView(screen)
+        setContentView(scroll)
+    }
+
+    private fun buildTopBar(): View {
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(16), dp(14), dp(16), dp(10))
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(TextView(this).apply {
+            text = "ChordsPro"; textSize = 16f
+            setTypeface(null, Typeface.BOLD); setTextColor(C.TXT_PRIMARY)
+        })
+        col.addView(TextView(this).apply {
+            text = "Melody → Chords"; textSize = 10f; setTextColor(C.TXT_MUTED)
+        })
+        tvStatus = TextView(this).apply {
+            text = "Starting…"; textSize = 9f; setTextColor(C.TXT_HINT)
+        }
+        col.addView(tvStatus)
+        bar.addView(col, lp(0, WRAP) { weight = 1f })
+
+        // Back button — finishes this activity (returns to launcher or App 1)
+        bar.addView(TextView(this).apply {
+            text = "← back"; textSize = 11f; setTextColor(C.PURPLE_MID)
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+            setOnClickListener { onBackPressedDispatcher.onBackPressed() }
+        })
+        return bar
+    }
+
+    private fun buildKeySelector(): View {
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(secLabel("① select key"))
+
+        val keyRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(14), 0, dp(14), dp(10))
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val piano = PianoKeySelectorView(this) { key ->
+            selectedKey = key
+            tvSelectedKey.text = key
+            tvKeyWarning.visibility = View.GONE
+        }
+        keyRow.addView(piano, lp(0, dp(64)) { weight = 1f; marginEnd = dp(12) })
+
+        val keyCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
+        keyCol.addView(TextView(this).apply { text = "Key"; textSize = 9f; setTextColor(C.TXT_HINT) })
+        tvSelectedKey = TextView(this).apply {
+            text = "C"; textSize = 22f
+            setTypeface(null, Typeface.BOLD); setTextColor(C.PURPLE_LITE)
+            gravity = Gravity.CENTER
+        }
+        keyCol.addView(tvSelectedKey)
+        keyRow.addView(keyCol, lp(dp(48), WRAP))
+        col.addView(keyRow)
+        return col
+    }
+
+    private fun buildStylePickers(): View {
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(secLabel("② style settings"))
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(14), 0, dp(14), dp(12))
+        }
+
+        val genres  = listOf("Jazz","Blues","Rock","Pop","Soul / R&B",
+            "Folk / Country","Funk","Bossa Nova","Electronic")
+        val decades = ChordEngine.DECADE_LABELS
+
+        row.addView(spinnerCard("Genre", genres)  { selectedGenre  = it }, lp(0, WRAP) { weight = 1f; marginEnd = dp(8) })
+        row.addView(spinnerCard("Decade", decades) { selectedDecade = it }, lp(0, WRAP) { weight = 1f })
+        col.addView(row)
+        return col
+    }
+
+    private fun buildRecordSection(): View {
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(secLabel("③ hum your melody"))
+
+        // Record button row
+        val recRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(14), 0, dp(14), dp(8))
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        btnRecord = TextView(this).apply {
+            text = "🎤 Hold to Record"; textSize = 13f; gravity = Gravity.CENTER
+            setTextColor(C.PURPLE_LITE)
+            setBackgroundColor(C.PURPLE)
+            setPadding(dp(16), dp(10), dp(16), dp(10))
+            setOnTouchListener { _, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> { startRecording(); true }
+                    MotionEvent.ACTION_UP   -> { stopRecording();  true }
+                    else -> false
+                }
+            }
+        }
+        recRow.addView(btnRecord, lp(0, WRAP) { weight = 1f; marginEnd = dp(10) })
+
+        btnGenerate = TextView(this).apply {
+            text = "Generate ↗"; textSize = 12f; gravity = Gravity.CENTER
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(C.PURPLE_LITE)
+            setBackgroundColor(C.PURPLE_DARK)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            isEnabled = false; alpha = 0.38f
+            setOnClickListener { onGenerateClicked() }
+        }
+        recRow.addView(btnGenerate)
+        col.addView(recRow)
+
+        // Detected notes
+        tvDetectedNotes = TextView(this).apply {
+            text = "Detected notes appear here…"
+            textSize = 11f; setTextColor(C.TXT_MUTED)
+            typeface = Typeface.MONOSPACE
+            setPadding(dp(14), dp(4), dp(14), dp(8))
+        }
+        col.addView(tvDetectedNotes)
+
+        // Key warning
+        tvKeyWarning = TextView(this).apply {
+            text = "⚠ Melody may not match selected key"
+            textSize = 10f; setTextColor(Color.parseColor("#FF6B35"))
+            setPadding(dp(14), 0, dp(14), dp(8))
+            visibility = View.GONE
+        }
+        col.addView(tvKeyWarning)
+        return col
+    }
+
+    private fun buildTracksSection(): View {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        col.addView(secLabel("④ instrument tracks"))
+
+        val instruments = listOf(
+            "Bass"           to "root · oct 2",
+            "Rhythm Guitar"  to "genre voicing",
+            "Piano"          to "split LH / RH",
+            "Pads / Strings" to "extended chord",
+            "Lead Melody"    to "7th · oct 5",
+            "Countermelody"  to "3rd · oct 4",
+            "Percussion"     to "pattern guide"
+        )
+        val colors = listOf(
+            C.SLOTS[0], C.SLOTS[1], C.SLOTS[2], C.SLOTS[3],
+            C.SLOTS[0], C.SLOTS[1], C.SLOTS[2]
+        )
+
+        val tvRefs = mutableListOf<TextView>()
+        instruments.forEachIndexed { i, (name, rule) ->
+            val cols = colors[i]
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(cols[0])
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+            }
+            val header = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            }
+            header.addView(TextView(this).apply {
+                text = name; textSize = 12f
+                setTypeface(null, Typeface.BOLD); setTextColor(cols[1])
+            }, lp(0, WRAP) { weight = 1f })
+            header.addView(TextView(this).apply {
+                text = rule; textSize = 9f; setTextColor(cols[2])
+            })
+            card.addView(header)
+            card.addView(View(this).apply {
+                setBackgroundColor(cols[3])
+                layoutParams = LinearLayout.LayoutParams(MATCH, dp(2)).apply {
+                    topMargin = dp(5); bottomMargin = dp(5)
+                }
+            })
+            val tv = TextView(this).apply {
+                text = "—"; textSize = 11f; setTextColor(cols[1])
+                typeface = Typeface.MONOSPACE; alpha = 0.5f
+            }
+            card.addView(tv)
+            tvRefs.add(tv)
+            col.addView(card, lp(MATCH, WRAP) { setMargins(dp(14), 0, dp(14), dp(6)) })
+        }
+
+        tvBass         = tvRefs[0]; tvRhythmGuitar = tvRefs[1]; tvPiano    = tvRefs[2]
+        tvPads         = tvRefs[3]; tvLead         = tvRefs[4]; tvCounter  = tvRefs[5]
+        tvPercussion   = tvRefs[6]
+        tracksSection  = col
+        col.visibility = View.GONE
+        return col
+    }
+
+    // ── Recording ─────────────────────────────────────────────────────────────
+
+    private fun startRecording() {
+        if (!pitchDetector.hasPermission()) {
+            ActivityCompat.requestPermissions(this,
+                arrayOf(Manifest.permission.RECORD_AUDIO), 201)
+            return
+        }
+        isRecording = true
+        detectedNotes = emptyList()
+        tvDetectedNotes.text = "🎤 Listening…"
+        tvKeyWarning.visibility = View.GONE
+        btnGenerate.isEnabled = false; btnGenerate.alpha = 0.38f
+        hideTracks()
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                pitchDetector.startRecording { note ->
+                    runOnUiThread {
+                        val current = tvDetectedNotes.text.toString()
+                        tvDetectedNotes.text = if (current == "🎤 Listening…") note
+                        else "$current  $note"
+                    }
+                }
+            }
+        }
+    }
+
+    private fun stopRecording() {
+        if (!isRecording) return
+        isRecording = false
+        lifecycleScope.launch(Dispatchers.IO) {
+            detectedNotes = pitchDetector.stopRecording()
+            withContext(Dispatchers.Main) {
+                if (detectedNotes.isEmpty()) {
+                    tvDetectedNotes.text = "No notes detected — try again"
+                } else {
+                    tvDetectedNotes.text = detectedNotes.joinToString("  ")
+                    btnGenerate.isEnabled = true; btnGenerate.alpha = 1f
+                    // Validate key
+                    if (!MelodyHarmonizer.validateKey(detectedNotes, selectedKey)) {
+                        tvKeyWarning.visibility = View.VISIBLE
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Generate ──────────────────────────────────────────────────────────────
+
+    private fun onGenerateClicked() {
+        if (detectedNotes.isEmpty()) return
+        btnGenerate.text = "Generating…"; btnGenerate.isEnabled = false
+        tvStatus.text = "Running pipeline…"
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                // Layer 3 → harmonize melody to seed chords
+                val seedChords = MelodyHarmonizer.harmonize(detectedNotes, selectedKey, selectedGenre)
+                val seedChord  = seedChords.firstOrNull() ?: selectedKey
+
+                // ChordSeqAI → extend to 4-chord progression
+                val chords = chordSeqRunner.extend(seedChord, selectedGenre, selectedDecade)
+
+                // Layer 2 → derive 7 instrument tracks
+                val tracks = ChordDeriver.deriveAllTracks(chords, selectedGenre, selectedDecade)
+
+                withContext(Dispatchers.Main) {
+                    displayTracks(tracks)
+                    tvStatus.text = "Done · ${chords.joinToString(" → ")}"
+                    btnGenerate.text = "Generate ↗"; btnGenerate.isEnabled = true; btnGenerate.alpha = 1f
+                }
+            }.onFailure { e ->
+                withContext(Dispatchers.Main) {
+                    Log.e("App2", "Pipeline failed", e)
+                    tvStatus.text = "Error: ${e.message}"
+                    btnGenerate.text = "Generate ↗"; btnGenerate.isEnabled = true; btnGenerate.alpha = 1f
+                }
+            }
+        }
+    }
+
+    private fun displayTracks(tracks: ChordDeriver.TrackResult) {
+        fun List<String>.fmt() = joinToString("  ·  ")
+        tvBass.text         = tracks.bass.fmt()
+        tvRhythmGuitar.text = tracks.rhythmGuitar.fmt()
+        tvPiano.text        = tracks.piano.joinToString("\n")
+        tvPads.text         = tracks.pads.fmt()
+        tvLead.text         = tracks.leadMelody.fmt()
+        tvCounter.text      = tracks.counterMelody.fmt()
+        tvPercussion.text   = tracks.percussion.joinToString("\n")
+        listOf(tvBass,tvRhythmGuitar,tvPiano,tvPads,tvLead,tvCounter,tvPercussion)
+            .forEach { it.alpha = 1f }
+        tracksSection.visibility = View.VISIBLE
+    }
+
+    private fun hideTracks() {
+        tracksSection.visibility = View.GONE
+        listOf(tvBass,tvRhythmGuitar,tvPiano,tvPads,tvLead,tvCounter,tvPercussion)
+            .forEach { it.text = "—"; it.alpha = 0.5f }
+    }
+
+    // ── Widget helpers ────────────────────────────────────────────────────────
+
+    private fun secLabel(txt: String) = TextView(this).apply {
+        text = txt; textSize = 10f; setTextColor(C.TXT_HINT)
+        setPadding(dp(14), dp(10), dp(14), dp(6))
+    }
+
+    private fun hDivider() = View(this).apply {
+        setBackgroundColor(C.BORDER)
+        layoutParams = LinearLayout.LayoutParams(MATCH, 1).apply {
+            setMargins(dp(14), 0, dp(14), 0)
+        }
+    }
+
+    private fun spinnerCard(label: String, items: List<String>,
+                            onSelected: (String) -> Unit): View {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(C.BG_SECTION)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+        }
+        col.addView(TextView(this).apply {
+            text = label; textSize = 9f; setTextColor(C.TXT_HINT)
+        })
+        val valueText = TextView(this).apply {
+            text = items.first(); textSize = 13f
+            setTextColor(C.TXT_PRIMARY)
+            setTypeface(null, Typeface.BOLD)
+        }
+        col.addView(valueText)
+        col.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle(label)
+                .setItems(items.toTypedArray()) { _, pos ->
+                    valueText.text = items[pos]
+                    onSelected(items[pos])
+                }.show()
+        }
+        return col
+    }
+
+    private fun lp(w: Int, h: Int, block: LinearLayout.LayoutParams.() -> Unit = {}) =
+        LinearLayout.LayoutParams(w, h).apply(block)
+
+    private fun dp(v: Int) = TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics
+    ).toInt()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PianoKeySelectorView — one-octave piano for key selection
+//  Same dark style as PianoSelectorView in MainActivity but single-octave
+// ─────────────────────────────────────────────────────────────────────────────
+class PianoKeySelectorView(
+    context: android.content.Context,
+    private val onKeySelected: (String) -> Unit
+) : View(context) {
+
+    private val whiteNotes = listOf("C","D","E","F","G","A","B")
+    private val blackNotes = listOf("C#" to 0,"D#" to 1, null to -1,"F#" to 3,"G#" to 4,"A#" to 5)
+    private var selectedKey = "C"
+
+    private val whitePaint    = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#E8E8F0"); style = Paint.Style.FILL }
+    private val blackPaint    = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#1A1A20"); style = Paint.Style.FILL }
+    private val selWhitePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#7F77DD"); style = Paint.Style.FILL }
+    private val selBlackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#534AB7"); style = Paint.Style.FILL }
+    private val borderPaint   = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#3A3A50"); style = Paint.Style.STROKE; strokeWidth = 1f }
+    private val labelPaint    = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#888899"); textSize = 22f; textAlign = Paint.Align.CENTER }
+    private val selLblPaint   = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 22f; textAlign = Paint.Align.CENTER }
+
+    override fun onDraw(canvas: Canvas) {
+        val w = width.toFloat(); val h = height.toFloat()
+        val kW = w / 7f; val bW = kW * 0.62f; val bH = h * 0.60f
+        whiteNotes.forEachIndexed { i, note ->
+            val x = i * kW; val sel = note == selectedKey
+            canvas.drawRect(x+1f, 0f, x+kW-1f, h-1f, if (sel) selWhitePaint else whitePaint)
+            canvas.drawRect(x+1f, 0f, x+kW-1f, h-1f, borderPaint)
+            canvas.drawText(note, x+kW/2f, h-10f, if (sel) selLblPaint else labelPaint)
+        }
+        blackNotes.forEach { (note, idx) ->
+            if (note == null) return@forEach
+            val x = idx*kW + kW - bW/2f; val sel = note == selectedKey
+            canvas.drawRoundRect(x, 0f, x+bW, bH, 6f, 6f, if (sel) selBlackPaint else blackPaint)
+        }
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.action != MotionEvent.ACTION_DOWN) return false
+        val kW = width.toFloat()/7f; val bW = kW*0.62f; val bH = height*0.60f
+        val x = event.x; val y = event.y
+        if (y < bH) {
+            blackNotes.forEach { (note, idx) ->
+                if (note == null) return@forEach
+                val bx = idx*kW + kW - bW/2f
+                if (x in bx..(bx+bW)) { selectedKey = note; onKeySelected(note); invalidate(); return true }
+            }
+        }
+        val idx = (x/kW).toInt().coerceIn(0,6)
+        selectedKey = whiteNotes[idx]; onKeySelected(selectedKey); invalidate()
+        return true
+    }
+}
