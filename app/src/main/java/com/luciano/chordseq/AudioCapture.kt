@@ -66,6 +66,21 @@ class AudioCapture(
         private const val ENCODING    = AudioFormat.ENCODING_PCM_16BIT
         private const val CONFIDENCE  = 0.85f   // YIN threshold — ignore noisy frames
         private const val BUFFER_SIZE_MULTIPLIER = 4
+
+        // ── Emulator test mode ────────────────────────────────────────────────
+        // Set to true when running on an emulator so that a simulated note
+        // sequence is used instead of the real microphone (which captures
+        // silence on most emulator configurations).
+        // Switch to false before building for a real device.
+        const val EMULATOR_TEST_MODE = false
+
+        // Notes that will be "detected" in emulator test mode (C major chord)
+        private val EMULATOR_NOTES = listOf(
+            60 to "C4",   // C4
+            64 to "E4",   // E4
+            67 to "G4",   // G4
+            72 to "C5"    // C5
+        )
     }
 
     // State
@@ -92,6 +107,17 @@ class AudioCapture(
         if (!hasPermission()) { onPermissionDenied(); return false }
         if (isRecording) return true
 
+        _detectedNotes.clear()
+        isRecording = true
+
+        if (EMULATOR_TEST_MODE) {
+            // ── Emulator mode: simulate note detection ────────────────────────
+            Log.d(TAG, "EMULATOR_TEST_MODE: simulating note input")
+            recordThread = Thread { emulatorLoop() }.also { it.start() }
+            return true
+        }
+
+        // ── Real device: use microphone ───────────────────────────────────────
         val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING)
         val bufSize = minBuf * BUFFER_SIZE_MULTIPLIER
 
@@ -102,13 +128,11 @@ class AudioCapture(
 
         if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
             Log.e(TAG, "AudioRecord failed to initialise")
+            isRecording = false
             return false
         }
 
-        _detectedNotes.clear()
-        isRecording = true
         audioRecord?.startRecording()
-
         recordThread = Thread { captureLoop(bufSize) }.also { it.start() }
         Log.d(TAG, "Recording started")
         return true
@@ -148,6 +172,27 @@ class AudioCapture(
         audioRecord = null
         recordThread?.join(500)
         recordThread = null
+    }
+
+    /**
+     * EMULATOR TEST MODE — simulates note detection at 500ms intervals.
+     * Emits EMULATOR_NOTES one by one while isRecording is true.
+     * This lets you test the full pipeline without a real microphone.
+     */
+    private fun emulatorLoop() {
+        Log.d(TAG, "Emulator loop started")
+        var idx = 0
+        while (isRecording) {
+            val (midi, name) = EMULATOR_NOTES[idx % EMULATOR_NOTES.size]
+            _detectedNotes.add(name to midi)
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                onNoteDetected(name, midi)
+            }
+            Log.d(TAG, "Emulator note: $name ($midi)")
+            idx++
+            Thread.sleep(500)
+        }
+        Log.d(TAG, "Emulator loop ended")
     }
 
     /**
