@@ -49,6 +49,10 @@ class MainActivity2 : AppCompatActivity() {
     private lateinit var btnGenerate     : TextView
     private lateinit var chordTimeline    : LinearLayout   // 4-chord cards
     private var currentChords             = listOf<String>()
+    private var currentTracks             : ChordDeriver.TrackResult? = null
+    private var barsPerChord              = 2
+    private lateinit var exportBtn         : TextView
+    private lateinit var exportSection     : View
     private lateinit var tracksSection   : LinearLayout
 
     // 7-track TextViews
@@ -120,6 +124,7 @@ class MainActivity2 : AppCompatActivity() {
         screen.addView(buildChordSection())
         screen.addView(hDivider())
         screen.addView(buildTracksSection())
+        screen.addView(buildExportSection())
 
         scroll.addView(screen)
         setContentView(scroll)
@@ -476,8 +481,11 @@ class MainActivity2 : AppCompatActivity() {
                 val tracks = ChordDeriver.deriveAllTracks(chords, selectedGenre, selectedDecade)
 
                 withContext(Dispatchers.Main) {
+                    currentTracks = tracks
                     displayChordProgression(chords)
                     displayTracks(tracks)
+                    // Show export section (find by tag in screen)
+                    showExportSection()
                     tvStatus.text = "Done · ${chords.joinToString(" → ")}"
                     btnGenerate.text = "Generate ↗"; btnGenerate.isEnabled = true; btnGenerate.alpha = 1f
                 }
@@ -509,13 +517,125 @@ class MainActivity2 : AppCompatActivity() {
         tracksSection.visibility = View.GONE
         listOf(tvBass,tvRhythmGuitar,tvPiano,tvPads,tvLead,tvCounter,tvPercussion)
             .forEach { it.text = "—"; it.alpha = 0.5f }
-        // Also reset chord timeline and roll
+        // Also reset chord timeline and export section
         val chordSection = chordTimeline.parent as? LinearLayout
         chordSection?.visibility = View.GONE
+        currentTracks = null
+        if (::exportSection.isInitialized) exportSection.visibility = View.GONE
 
     }
 
     // ── Widget helpers ────────────────────────────────────────────────────────
+
+    private fun buildExportSection(): View {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            setPadding(dp(14), dp(10), dp(14), dp(14))
+        }
+        exportSection = col
+
+        col.addView(secLabel("⑤ export to DAW"))
+
+        // Bars per chord selector
+        val barsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(6), 0, dp(10))
+        }
+        barsRow.addView(TextView(this).apply {
+            text = "Bars per chord:"; textSize = 11f; setTextColor(C.TXT_MUTED)
+        }, lp(0, WRAP) { weight = 1f })
+
+        listOf(1, 2, 4).forEach { bars ->
+            val btn = TextView(this).apply {
+                text = "$bars"; textSize = 12f; gravity = Gravity.CENTER
+                setTextColor(if (bars == barsPerChord) C.PURPLE_LITE else C.TXT_MUTED)
+                setBackgroundColor(if (bars == barsPerChord) C.PURPLE else C.BG_CARD)
+                setPadding(dp(14), dp(7), dp(14), dp(7))
+                tag = bars
+            }
+            btn.setOnClickListener {
+                barsPerChord = bars
+                // Update button styles
+                val parent = btn.parent as LinearLayout
+                for (i in 1 until parent.childCount) {
+                    val b = parent.getChildAt(i) as? TextView ?: continue
+                    val v = b.tag as? Int ?: continue
+                    b.setTextColor(if (v == barsPerChord) C.PURPLE_LITE else C.TXT_MUTED)
+                    b.setBackgroundColor(if (v == barsPerChord) C.PURPLE else C.BG_CARD)
+                }
+            }
+            barsRow.addView(btn, lp(WRAP, WRAP) { marginStart = dp(6) })
+        }
+        col.addView(barsRow)
+
+        // Export button
+        exportBtn = TextView(this).apply {
+            text = "Export MIDI ↗"; textSize = 13f; gravity = Gravity.CENTER
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(C.PURPLE_LITE); setBackgroundColor(C.PURPLE)
+            setPadding(dp(18), dp(12), dp(18), dp(12))
+            setOnClickListener { onExportClicked() }
+        }
+        col.addView(exportBtn, lp(MATCH, WRAP))
+        return col
+    }
+
+    private fun showExportSection() {
+        exportSection.visibility = View.VISIBLE
+    }
+
+    private fun onExportClicked() {
+        val tracks = currentTracks ?: return
+        if (currentChords.isEmpty()) return
+
+        exportBtn.text = "Generating…"; exportBtn.isEnabled = false
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching {
+                val midi = MidiExporter.export(
+                    tracks       = tracks,
+                    chords       = currentChords,
+                    bpm          = 120,
+                    barsPerChord = barsPerChord
+                )
+
+                // Save to Downloads
+                val fileName = "ChordsPro_${System.currentTimeMillis()}.mid"
+                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOWNLOADS
+                )
+                val file = java.io.File(downloadsDir, fileName)
+                file.writeBytes(midi)
+
+                // Share sheet
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    this@MainActivity2,
+                    "${packageName}.provider",
+                    file
+                )
+                val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = "audio/midi"
+                    putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                    putExtra(android.content.Intent.EXTRA_SUBJECT, "ChordsPro MIDI Export")
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+
+                withContext(Dispatchers.Main) {
+                    startActivity(android.content.Intent.createChooser(shareIntent, "Share MIDI file"))
+                    exportBtn.text = "Export MIDI ↗"; exportBtn.isEnabled = true
+                    tvStatus.text = "Saved: $fileName"
+                }
+            }.onFailure { e ->
+                withContext(Dispatchers.Main) {
+                    android.util.Log.e("App2", "MIDI export failed", e)
+                    tvStatus.text = "Export failed: ${e.message}"
+                    exportBtn.text = "Export MIDI ↗"; exportBtn.isEnabled = true
+                }
+            }
+        }
+    }
 
     private fun secLabel(txt: String) = TextView(this).apply {
         text = txt; textSize = 10f; setTextColor(C.TXT_HINT)
