@@ -31,6 +31,7 @@ import kotlinx.coroutines.withContext
 class MainActivity2 : AppCompatActivity() {
 
     private lateinit var pitchDetector    : PitchDetector
+
     private lateinit var chordSeqRunner   : ChordSeqAIRunner
 
     private var selectedKey    = "C"
@@ -46,6 +47,8 @@ class MainActivity2 : AppCompatActivity() {
     private lateinit var tvStatus        : TextView
     private lateinit var btnRecord       : TextView
     private lateinit var btnGenerate     : TextView
+    private lateinit var chordTimeline    : LinearLayout   // 4-chord cards
+    private var currentChords             = listOf<String>()
     private lateinit var tracksSection   : LinearLayout
 
     // 7-track TextViews
@@ -67,6 +70,7 @@ class MainActivity2 : AppCompatActivity() {
         buildUI()
 
         pitchDetector = PitchDetector(this)
+
         chordSeqRunner = ChordSeqAIRunner(this)
 
         tvStatus.text = "Loading model…"
@@ -112,6 +116,8 @@ class MainActivity2 : AppCompatActivity() {
         screen.addView(buildStylePickers())
         screen.addView(hDivider())
         screen.addView(buildRecordSection())
+        screen.addView(hDivider())
+        screen.addView(buildChordSection())
         screen.addView(hDivider())
         screen.addView(buildTracksSection())
 
@@ -255,6 +261,84 @@ class MainActivity2 : AppCompatActivity() {
         return col
     }
 
+    private fun buildChordSection(): View {
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(secLabel("④ chord progression"))
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(14), 0, dp(14), dp(10))
+        }
+
+        // 4 chord slots
+        chordTimeline = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(C.BG_SECTION)
+        }
+
+        // Placeholder slots
+        for (i in 0..3) {
+            val cols = C.SLOTS[i % C.SLOTS.size]
+            val slot = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(8), dp(7), dp(8), 0)
+                setBackgroundColor(C.BG_SECTION)
+                alpha = 0.35f
+            }
+            slot.addView(TextView(this).apply {
+                text = "—"; textSize = 13f
+                setTypeface(null, Typeface.BOLD); setTextColor(C.TXT_HINT)
+                gravity = Gravity.CENTER
+            })
+            slot.addView(View(this).apply {
+                setBackgroundColor(cols[3])
+                layoutParams = LinearLayout.LayoutParams(MATCH, dp(3)).apply { topMargin = dp(5) }
+            })
+            chordTimeline.addView(slot, lp(0, MATCH) { weight = 1f })
+        }
+
+        col.addView(chordTimeline, lp(MATCH, dp(56)) { setMargins(dp(14), 0, dp(14), 0) })
+        col.visibility = View.GONE
+        col.tag = "chord_section"
+        return col
+    }
+
+    private fun displayChordProgression(chords: List<String>) {
+        currentChords = chords
+        chordTimeline.removeAllViews()
+        chords.forEachIndexed { i, name ->
+            val cols = C.SLOTS[i % C.SLOTS.size]
+            val slot = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(8), dp(7), dp(8), 0)
+                setBackgroundColor(cols[0])
+            }
+            slot.addView(TextView(this).apply {
+                text = name; textSize = 13f
+                setTypeface(null, Typeface.BOLD); setTextColor(cols[1])
+            })
+            slot.addView(TextView(this).apply {
+                text = listOf("I","II","III","IV")[i]; textSize = 9f; setTextColor(cols[2])
+            })
+            slot.addView(View(this).apply {
+                setBackgroundColor(cols[3])
+                layoutParams = LinearLayout.LayoutParams(MATCH, dp(3)).apply { topMargin = dp(5) }
+            })
+
+            chordTimeline.addView(slot, lp(0, MATCH) { weight = 1f })
+        }
+
+        // Show chord section
+        val chordSection = chordTimeline.parent as? LinearLayout
+        chordSection?.visibility = View.VISIBLE
+
+
+    }
+
+
+
+
+
     private fun buildTracksSection(): View {
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -341,6 +425,13 @@ class MainActivity2 : AppCompatActivity() {
                         else "$current  $note"
                     }
                 }
+            }.onFailure { e ->
+                withContext(Dispatchers.Main) {
+                    isRecording = false
+                    tvDetectedNotes.text = "Microphone error: ${e.message}"
+                    btnGenerate.isEnabled = false
+                    android.util.Log.e("App2", "startRecording failed", e)
+                }
             }
         }
     }
@@ -385,6 +476,7 @@ class MainActivity2 : AppCompatActivity() {
                 val tracks = ChordDeriver.deriveAllTracks(chords, selectedGenre, selectedDecade)
 
                 withContext(Dispatchers.Main) {
+                    displayChordProgression(chords)
                     displayTracks(tracks)
                     tvStatus.text = "Done · ${chords.joinToString(" → ")}"
                     btnGenerate.text = "Generate ↗"; btnGenerate.isEnabled = true; btnGenerate.alpha = 1f
@@ -417,6 +509,10 @@ class MainActivity2 : AppCompatActivity() {
         tracksSection.visibility = View.GONE
         listOf(tvBass,tvRhythmGuitar,tvPiano,tvPads,tvLead,tvCounter,tvPercussion)
             .forEach { it.text = "—"; it.alpha = 0.5f }
+        // Also reset chord timeline and roll
+        val chordSection = chordTimeline.parent as? LinearLayout
+        chordSection?.visibility = View.GONE
+
     }
 
     // ── Widget helpers ────────────────────────────────────────────────────────
