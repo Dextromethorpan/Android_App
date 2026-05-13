@@ -380,23 +380,22 @@ class MainActivity2 : AppCompatActivity() {
         })
         col.addView(playAllRow)
 
-        // 11 tracks: Bass, Guitar, Piano LH, Piano RH, Pads, Lead, Counter, Kick, Snare, HiHat, Crash
         val instruments = listOf(
-            "Bass"              to "root · oct 2",
-            "Rhythm Guitar"     to "genre voicing",
-            "Piano — Left Hand" to "root + 5th · oct 3",
+            "Bass"               to "root · oct 2",
+            "Rhythm Guitar"      to "genre voicing",
+            "Piano — Left Hand"  to "root + 5th · oct 3",
             "Piano — Right Hand" to "3rd + 7th · oct 4",
-            "Pads / Strings"    to "extended chord",
-            "Lead Melody"       to "7th · oct 5",
-            "Countermelody"     to "3rd · oct 4",
-            "Kick"              to "beat 1 & 3",
-            "Snare"             to "beat 2 & 4",
-            "Hi-Hat"            to "8ths / 16ths",
-            "Crash"             to "accent"
+            "Pads / Strings"     to "extended chord",
+            "Lead Melody"        to "7th · oct 5",
+            "Countermelody"      to "3rd · oct 4",
+            "Kick"               to "beat 1 & 3",
+            "Snare"              to "beat 2 & 4",
+            "Hi-Hat"             to "8ths / 16ths",
+            "Crash"              to "accent"
         )
         val colors = listOf(
             C.SLOTS[0], C.SLOTS[1],
-            C.SLOTS[2], C.SLOTS[2],   // LH and RH share piano color
+            C.SLOTS[2], C.SLOTS[2],
             C.SLOTS[3], C.SLOTS[0], C.SLOTS[1],
             C.SLOTS[2], C.SLOTS[3], C.SLOTS[0], C.SLOTS[1]
         )
@@ -406,65 +405,86 @@ class MainActivity2 : AppCompatActivity() {
 
         instruments.forEachIndexed { i, (name, rule) ->
             val cols = colors[i]
-            val card = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setBackgroundColor(cols[0])
-                setPadding(dp(12), dp(10), dp(12), dp(10))
-            }
+            val trackIdx = i
 
-            // Header row
+            val wrapper = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
+            // Track label row
             val header = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(14), dp(8), dp(14), dp(4))
+                gravity = Gravity.CENTER_VERTICAL
             }
             header.addView(TextView(this).apply {
-                text = name; textSize = 12f
-                setTypeface(null, Typeface.BOLD); setTextColor(cols[1])
+                text = name; textSize = 11f
+                setTypeface(null, Typeface.BOLD); setTextColor(C.TXT_HINT)
             }, lp(0, WRAP) { weight = 1f })
             header.addView(TextView(this).apply {
-                text = rule; textSize = 9f; setTextColor(cols[2])
+                text = rule; textSize = 9f; setTextColor(C.TXT_HINT)
             })
-            val trackIdx = i
             header.addView(TextView(this).apply {
                 text = "  ▶"; textSize = 12f; setTextColor(cols[3])
                 setPadding(dp(8), dp(2), 0, dp(2))
                 setOnClickListener { onPlayTrackClicked(trackIdx) }
             })
-            card.addView(header)
+            wrapper.addView(header)
 
-            // Accent bar
-            card.addView(View(this).apply {
-                setBackgroundColor(cols[3])
-                layoutParams = LinearLayout.LayoutParams(MATCH, dp(2)).apply {
-                    topMargin = dp(5); bottomMargin = dp(5)
+            // 4 value cards side by side — like App 1 chord timeline
+            val timeline = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            val slotTexts = mutableListOf<TextView>()
+            for (s in 0..3) {
+                val sc = C.SLOTS[s % C.SLOTS.size]
+                val slot = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(8), dp(7), dp(8), 0)
+                    setBackgroundColor(sc[0])
                 }
-            })
-
-            // Text output
-            val tv = TextView(this).apply {
-                text = "—"; textSize = 11f; setTextColor(cols[1])
-                typeface = Typeface.MONOSPACE; alpha = 0.5f
+                val valueText = TextView(this).apply {
+                    text = "—"; textSize = 12f
+                    setTypeface(null, Typeface.BOLD); setTextColor(sc[1])
+                }
+                slot.addView(valueText)
+                slot.addView(TextView(this).apply {
+                    text = listOf("I","II","III","IV")[s]
+                    textSize = 9f; setTextColor(sc[2])
+                })
+                slot.addView(View(this).apply {
+                    setBackgroundColor(sc[3])
+                    layoutParams = LinearLayout.LayoutParams(MATCH, dp(3)).apply { topMargin = dp(5) }
+                })
+                slotTexts.add(valueText)
+                timeline.addView(slot, lp(0, dp(56)) { weight = 1f })
             }
-            card.addView(tv)
-            tvRefs.add(tv)
 
-            // Mini piano roll (not for percussion cards)
+            // Store slot refs via a dummy TextView tag
+            val tv = TextView(this).apply { text = "—"; visibility = View.GONE; tag = slotTexts }
+            tvRefs.add(tv)
+            wrapper.addView(tv)
+            wrapper.addView(timeline, lp(MATCH, dp(56)) { setMargins(dp(14), 0, dp(14), 0) })
+
+            // Wide piano roll below all 4 slots
             val roll = TrackMiniRollView(this, cols[3])
             trackRolls.add(roll)
-            val rollHeight = if (i >= 7) dp(40) else dp(120)  // shorter for percussion
-            card.addView(roll, LinearLayout.LayoutParams(MATCH, rollHeight).apply {
-                topMargin = dp(6)
+            val rollH = if (i >= 7) dp(40) else dp(140)
+            wrapper.addView(roll, LinearLayout.LayoutParams(MATCH, rollH).apply {
+                setMargins(dp(14), dp(4), dp(14), 0)
             })
 
-            col.addView(card, lp(MATCH, WRAP) { setMargins(dp(14), 0, dp(14), dp(6)) })
+            wrapper.addView(View(this).apply {
+                setBackgroundColor(C.BORDER)
+                layoutParams = LinearLayout.LayoutParams(MATCH, 1).apply { topMargin = dp(8) }
+            })
+
+            col.addView(wrapper, lp(MATCH, WRAP))
         }
 
         tvBass         = tvRefs[0];  tvRhythmGuitar = tvRefs[1]
         tvPianoLH      = tvRefs[2];  tvPianoRH      = tvRefs[3]
-        tvPiano        = tvRefs[2]   // keep old ref pointing to LH for compat
+        tvPiano        = tvRefs[2]
         tvPads         = tvRefs[4];  tvLead         = tvRefs[5]; tvCounter = tvRefs[6]
         tvKick         = tvRefs[7];  tvSnare        = tvRefs[8]
         tvHiHat        = tvRefs[9];  tvCrash        = tvRefs[10]
-        tvPercussion   = tvRefs[7]   // keep old ref pointing to kick for compat
+        tvPercussion   = tvRefs[7]
         tracksSection  = col
         col.visibility = View.GONE
         return col
@@ -670,62 +690,58 @@ class MainActivity2 : AppCompatActivity() {
     }
 
     private fun displayTracks(tracks: ChordDeriver.TrackResult) {
-        fun List<String>.fmt() = joinToString("  ·  ")
-
-        // Parse piano LH and RH notes from "LH:C3+G3  RH:E4+B4"
         val lhNotes = tracks.piano.map { p -> p.substringAfter("LH:").substringBefore(" ").split("+").firstOrNull() ?: "C3" }
         val rhNotes = tracks.piano.map { p -> p.substringAfter("RH:").split("+").firstOrNull() ?: "E4" }
 
-        // Smart percussion parser — each pattern string belongs to exactly one card
-        // by checking which instrument keyword appears first in the string
         fun classifyPercLine(line: String): String {
             val l = line.lowercase()
             return when {
                 l.startsWith("kick") || l.contains("4-on-floor") -> "kick"
                 l.startsWith("snare") || l.startsWith("clap") || l.contains("snare/clap") -> "snare"
-                l.startsWith("hi-hat") || l.startsWith("hi hat") ||
-                        l.contains("hi-hat") || l.contains("shuffle") ||
+                l.contains("hi-hat") || l.contains("hi hat") || l.contains("shuffle") ||
                         l.contains("ride") || l.contains("8ths") || l.contains("16ths") -> "hihat"
-                l.startsWith("crash") || l.startsWith("accent") ||
-                        l.contains("crash") || l.contains("ghost") ||
-                        l.contains("perc") || l.contains("brush") || l.contains("rim") -> "crash"
-                else -> "crash"  // fallback to crash/accent card
+                else -> "crash"
             }
         }
-
         val kickLines  = tracks.percussion.filter { classifyPercLine(it) == "kick" }
         val snareLines = tracks.percussion.filter { classifyPercLine(it) == "snare" }
         val hihatLines = tracks.percussion.filter { classifyPercLine(it) == "hihat" }
         val crashLines = tracks.percussion.filter { classifyPercLine(it) == "crash" }
 
-        tvBass.text         = tracks.bass.fmt()
-        tvRhythmGuitar.text = tracks.rhythmGuitar.fmt()
-        tvPianoLH.text      = lhNotes.joinToString("  ·  ")
-        tvPianoRH.text      = rhNotes.joinToString("  ·  ")
-        tvPads.text         = tracks.pads.fmt()
-        tvLead.text         = tracks.leadMelody.fmt()
-        tvCounter.text      = tracks.counterMelody.fmt()
-        tvKick.text         = kickLines.joinToString(", ").ifEmpty { "No kick pattern" }
-        tvSnare.text        = snareLines.joinToString(", ").ifEmpty { "No snare pattern" }
-        tvHiHat.text        = hihatLines.joinToString(", ").ifEmpty { "No hi-hat pattern" }
-        tvCrash.text        = crashLines.joinToString(", ").ifEmpty { "No crash/accent" }
+        // 11 track value lists — 4 values each (one per chord slot)
+        val allValues = listOf(
+            tracks.bass,
+            tracks.rhythmGuitar,
+            lhNotes,
+            rhNotes,
+            tracks.pads,
+            tracks.leadMelody,
+            tracks.counterMelody,
+            List(4) { kickLines.joinToString(", ").ifEmpty { "—" } },
+            List(4) { snareLines.joinToString(", ").ifEmpty { "—" } },
+            List(4) { hihatLines.joinToString(", ").ifEmpty { "—" } },
+            List(4) { crashLines.joinToString(", ").ifEmpty { "—" } }
+        )
 
-        listOf(tvBass,tvRhythmGuitar,tvPianoLH,tvPianoRH,tvPads,tvLead,tvCounter,
-            tvKick,tvSnare,tvHiHat,tvCrash).forEach { it.alpha = 1f }
+        // Fill each track's 4 slot cards
+        val tvList = listOf(tvBass, tvRhythmGuitar, tvPianoLH, tvPianoRH, tvPads,
+            tvLead, tvCounter, tvKick, tvSnare, tvHiHat, tvCrash)
+        tvList.forEachIndexed { i, tv ->
+            val values = allValues.getOrElse(i) { emptyList() }
+            @Suppress("UNCHECKED_CAST")
+            val slots = tv.tag as? MutableList<TextView>
+            slots?.forEachIndexed { s, slotTv ->
+                slotTv.text  = values.getOrElse(s) { "—" }
+                slotTv.alpha = 1f
+            }
+        }
 
-        // Feed mini rolls (11 tracks)
-        val allTrackNotes = listOf(
-            tracks.bass,                    // 0 Bass
-            tracks.rhythmGuitar,            // 1 Guitar
-            lhNotes,                        // 2 Piano LH
-            rhNotes,                        // 3 Piano RH
-            tracks.pads,                    // 4 Pads
-            tracks.leadMelody,              // 5 Lead
-            tracks.counterMelody,           // 6 Counter
-            emptyList<String>(),            // 7 Kick (no pitched roll)
-            emptyList<String>(),            // 8 Snare
-            emptyList<String>(),            // 9 HiHat
-            emptyList<String>()             // 10 Crash
+        // Feed mini rolls (pitched tracks only)
+        val allTrackNotes: List<List<String>> = listOf(
+            tracks.bass, tracks.rhythmGuitar,
+            lhNotes, rhNotes, tracks.pads,
+            tracks.leadMelody, tracks.counterMelody,
+            emptyList(), emptyList(), emptyList(), emptyList()
         )
         trackRolls.forEachIndexed { i, roll ->
             roll.setNotes(allTrackNotes.getOrElse(i) { emptyList() }, chordEngine2)
