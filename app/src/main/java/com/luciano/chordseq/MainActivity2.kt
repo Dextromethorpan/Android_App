@@ -58,6 +58,14 @@ class MainActivity2 : AppCompatActivity() {
     private val trackRolls   = mutableListOf<TrackMiniRollView>()
     private var playAllJob   : kotlinx.coroutines.Job? = null
     private var chordEngine2 : ChordEngine? = null
+
+    // Extra TV refs for split tracks
+    private lateinit var tvPianoLH   : TextView
+    private lateinit var tvPianoRH   : TextView
+    private lateinit var tvKick      : TextView
+    private lateinit var tvSnare     : TextView
+    private lateinit var tvHiHat     : TextView
+    private lateinit var tvCrash     : TextView
     private lateinit var tracksSection   : LinearLayout
 
     // 7-track TextViews
@@ -372,18 +380,25 @@ class MainActivity2 : AppCompatActivity() {
         })
         col.addView(playAllRow)
 
+        // 11 tracks: Bass, Guitar, Piano LH, Piano RH, Pads, Lead, Counter, Kick, Snare, HiHat, Crash
         val instruments = listOf(
-            "Bass"           to "root · oct 2",
-            "Rhythm Guitar"  to "genre voicing",
-            "Piano"          to "split LH / RH",
-            "Pads / Strings" to "extended chord",
-            "Lead Melody"    to "7th · oct 5",
-            "Countermelody"  to "3rd · oct 4",
-            "Percussion"     to "pattern guide"
+            "Bass"              to "root · oct 2",
+            "Rhythm Guitar"     to "genre voicing",
+            "Piano — Left Hand" to "root + 5th · oct 3",
+            "Piano — Right Hand" to "3rd + 7th · oct 4",
+            "Pads / Strings"    to "extended chord",
+            "Lead Melody"       to "7th · oct 5",
+            "Countermelody"     to "3rd · oct 4",
+            "Kick"              to "beat 1 & 3",
+            "Snare"             to "beat 2 & 4",
+            "Hi-Hat"            to "8ths / 16ths",
+            "Crash"             to "accent"
         )
         val colors = listOf(
-            C.SLOTS[0], C.SLOTS[1], C.SLOTS[2], C.SLOTS[3],
-            C.SLOTS[0], C.SLOTS[1], C.SLOTS[2]
+            C.SLOTS[0], C.SLOTS[1],
+            C.SLOTS[2], C.SLOTS[2],   // LH and RH share piano color
+            C.SLOTS[3], C.SLOTS[0], C.SLOTS[1],
+            C.SLOTS[2], C.SLOTS[3], C.SLOTS[0], C.SLOTS[1]
         )
 
         trackRolls.clear()
@@ -397,7 +412,7 @@ class MainActivity2 : AppCompatActivity() {
                 setPadding(dp(12), dp(10), dp(12), dp(10))
             }
 
-            // Header row: name + rule + play button
+            // Header row
             val header = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             }
@@ -424,7 +439,7 @@ class MainActivity2 : AppCompatActivity() {
                 }
             })
 
-            // Text output (chord names)
+            // Text output
             val tv = TextView(this).apply {
                 text = "—"; textSize = 11f; setTextColor(cols[1])
                 typeface = Typeface.MONOSPACE; alpha = 0.5f
@@ -432,19 +447,24 @@ class MainActivity2 : AppCompatActivity() {
             card.addView(tv)
             tvRefs.add(tv)
 
-            // Mini piano roll
+            // Mini piano roll (not for percussion cards)
             val roll = TrackMiniRollView(this, cols[3])
             trackRolls.add(roll)
-            card.addView(roll, LinearLayout.LayoutParams(MATCH, dp(120)).apply {
+            val rollHeight = if (i >= 7) dp(40) else dp(120)  // shorter for percussion
+            card.addView(roll, LinearLayout.LayoutParams(MATCH, rollHeight).apply {
                 topMargin = dp(6)
             })
 
             col.addView(card, lp(MATCH, WRAP) { setMargins(dp(14), 0, dp(14), dp(6)) })
         }
 
-        tvBass         = tvRefs[0]; tvRhythmGuitar = tvRefs[1]; tvPiano    = tvRefs[2]
-        tvPads         = tvRefs[3]; tvLead         = tvRefs[4]; tvCounter  = tvRefs[5]
-        tvPercussion   = tvRefs[6]
+        tvBass         = tvRefs[0];  tvRhythmGuitar = tvRefs[1]
+        tvPianoLH      = tvRefs[2];  tvPianoRH      = tvRefs[3]
+        tvPiano        = tvRefs[2]   // keep old ref pointing to LH for compat
+        tvPads         = tvRefs[4];  tvLead         = tvRefs[5]; tvCounter = tvRefs[6]
+        tvKick         = tvRefs[7];  tvSnare        = tvRefs[8]
+        tvHiHat        = tvRefs[9];  tvCrash        = tvRefs[10]
+        tvPercussion   = tvRefs[7]   // keep old ref pointing to kick for compat
         tracksSection  = col
         col.visibility = View.GONE
         return col
@@ -454,23 +474,64 @@ class MainActivity2 : AppCompatActivity() {
 
     private fun onPlayTrackClicked(trackIdx: Int) {
         val tracks = currentTracks ?: return
-        val notesList: List<String> = when (trackIdx) {
+        // Map track index to note list
+        // 0=Bass 1=Guitar 2=PianoLH 3=PianoRH 4=Pads 5=Lead 6=Counter 7-10=Perc
+        val notesList: List<String>? = when (trackIdx) {
             0 -> tracks.bass
             1 -> tracks.rhythmGuitar
-            2 -> tracks.piano.map { it.substringAfter("LH:").substringBefore(" ").split("+").first() }
-            3 -> tracks.pads
-            4 -> tracks.leadMelody
-            5 -> tracks.counterMelody
-            else -> return   // percussion — no pitched notes
-        }
-        lifecycleScope.launch {
-            notesList.forEachIndexed { ci, noteName ->
-                trackRolls.getOrNull(trackIdx)?.highlightChord(ci)
-                val midi = MidiExporter.noteNameToMidi(noteName.trim()) ?: return@forEachIndexed
-                PianoSynth.playChord(listOf(midi), durationMs = 1400)
-                kotlinx.coroutines.delay(1700)
+            2 -> tracks.piano.map { p -> // LH: root+fifth
+                p.substringAfter("LH:").substringBefore(" ").split("+").firstOrNull() ?: "C3"
             }
-            trackRolls.getOrNull(trackIdx)?.highlightChord(-1)
+            3 -> tracks.piano.map { p -> // RH: third+seventh
+                p.substringAfter("RH:").split("+").firstOrNull() ?: "E4"
+            }
+            4 -> tracks.pads
+            5 -> tracks.leadMelody
+            6 -> tracks.counterMelody
+            else -> null  // percussion — handled separately below
+        }
+
+        if (notesList != null) {
+            // Pitched track playback
+            lifecycleScope.launch {
+                notesList.forEachIndexed { ci, noteName ->
+                    trackRolls.getOrNull(trackIdx)?.highlightChord(ci)
+                    val midi = MidiExporter.noteNameToMidi(noteName.trim()) ?: return@forEachIndexed
+                    PianoSynth.playChord(listOf(midi), durationMs = 1400)
+                    kotlinx.coroutines.delay(1700)
+                }
+                trackRolls.getOrNull(trackIdx)?.highlightChord(-1)
+            }
+        } else {
+            // Percussion track — play GM drum hits
+            // GM drum MIDI notes (played via PianoSynth on channel 10 equivalent)
+            // We use specific MIDI note numbers that map to drum sounds in GM:
+            //   36 = Kick, 38 = Snare, 42 = Closed Hi-Hat, 49 = Crash
+            val drumMidi = when (trackIdx) {
+                7  -> listOf(36) // Kick
+                8  -> listOf(38) // Snare
+                9  -> listOf(42) // Hi-Hat (closed)
+                10 -> listOf(49) // Crash cymbal
+                else -> return
+            }
+            // Repeat the hit for each chord duration so user hears the pattern
+            lifecycleScope.launch {
+                val tracks2 = currentTracks ?: return@launch
+                val chordCount = currentChords.size
+                repeat(chordCount) { ci ->
+                    trackRolls.getOrNull(trackIdx)?.highlightChord(ci)
+                    // Play the hit multiple times within each chord (simulating the pattern)
+                    val hitsPerChord = when (trackIdx) {
+                        9  -> 4  // Hi-Hat plays more frequently
+                        else -> 2
+                    }
+                    repeat(hitsPerChord) {
+                        PianoSynth.playChord(drumMidi, durationMs = 200)
+                        kotlinx.coroutines.delay((1700L / hitsPerChord))
+                    }
+                }
+                trackRolls.getOrNull(trackIdx)?.highlightChord(-1)
+            }
         }
     }
 
@@ -501,6 +562,10 @@ class MainActivity2 : AppCompatActivity() {
                     val lhRoot = pianoStr.substringAfter("LH:").substringBefore("+").trim()
                     MidiExporter.noteNameToMidi(lhRoot)?.let { allNotes.add(it) }
                 }
+
+                // Add kick and snare to the mix for full band feel
+                allNotes.add(36)  // Kick
+                allNotes.add(38)  // Snare
 
                 if (allNotes.isNotEmpty()) {
                     PianoSynth.playChord(allNotes.distinct(), durationMs = 1400)
@@ -606,22 +671,61 @@ class MainActivity2 : AppCompatActivity() {
 
     private fun displayTracks(tracks: ChordDeriver.TrackResult) {
         fun List<String>.fmt() = joinToString("  ·  ")
+
+        // Parse piano LH and RH notes from "LH:C3+G3  RH:E4+B4"
+        val lhNotes = tracks.piano.map { p -> p.substringAfter("LH:").substringBefore(" ").split("+").firstOrNull() ?: "C3" }
+        val rhNotes = tracks.piano.map { p -> p.substringAfter("RH:").split("+").firstOrNull() ?: "E4" }
+
+        // Smart percussion parser — each pattern string belongs to exactly one card
+        // by checking which instrument keyword appears first in the string
+        fun classifyPercLine(line: String): String {
+            val l = line.lowercase()
+            return when {
+                l.startsWith("kick") || l.contains("4-on-floor") -> "kick"
+                l.startsWith("snare") || l.startsWith("clap") || l.contains("snare/clap") -> "snare"
+                l.startsWith("hi-hat") || l.startsWith("hi hat") ||
+                        l.contains("hi-hat") || l.contains("shuffle") ||
+                        l.contains("ride") || l.contains("8ths") || l.contains("16ths") -> "hihat"
+                l.startsWith("crash") || l.startsWith("accent") ||
+                        l.contains("crash") || l.contains("ghost") ||
+                        l.contains("perc") || l.contains("brush") || l.contains("rim") -> "crash"
+                else -> "crash"  // fallback to crash/accent card
+            }
+        }
+
+        val kickLines  = tracks.percussion.filter { classifyPercLine(it) == "kick" }
+        val snareLines = tracks.percussion.filter { classifyPercLine(it) == "snare" }
+        val hihatLines = tracks.percussion.filter { classifyPercLine(it) == "hihat" }
+        val crashLines = tracks.percussion.filter { classifyPercLine(it) == "crash" }
+
         tvBass.text         = tracks.bass.fmt()
         tvRhythmGuitar.text = tracks.rhythmGuitar.fmt()
-        tvPiano.text        = tracks.piano.joinToString("\n")
+        tvPianoLH.text      = lhNotes.joinToString("  ·  ")
+        tvPianoRH.text      = rhNotes.joinToString("  ·  ")
         tvPads.text         = tracks.pads.fmt()
         tvLead.text         = tracks.leadMelody.fmt()
         tvCounter.text      = tracks.counterMelody.fmt()
-        tvPercussion.text   = tracks.percussion.joinToString("\n")
-        listOf(tvBass,tvRhythmGuitar,tvPiano,tvPads,tvLead,tvCounter,tvPercussion)
-            .forEach { it.alpha = 1f }
+        tvKick.text         = kickLines.joinToString(", ").ifEmpty { "No kick pattern" }
+        tvSnare.text        = snareLines.joinToString(", ").ifEmpty { "No snare pattern" }
+        tvHiHat.text        = hihatLines.joinToString(", ").ifEmpty { "No hi-hat pattern" }
+        tvCrash.text        = crashLines.joinToString(", ").ifEmpty { "No crash/accent" }
 
-        // Feed mini rolls
+        listOf(tvBass,tvRhythmGuitar,tvPianoLH,tvPianoRH,tvPads,tvLead,tvCounter,
+            tvKick,tvSnare,tvHiHat,tvCrash).forEach { it.alpha = 1f }
+
+        // Feed mini rolls (11 tracks)
         val allTrackNotes = listOf(
-            tracks.bass, tracks.rhythmGuitar,
-            tracks.piano.map { it.substringAfter("LH:").substringBefore(" ").split("+").first() },
-            tracks.pads, tracks.leadMelody, tracks.counterMelody,
-            tracks.percussion  // percussion shows text pattern, roll stays empty
+            tracks.bass,                    // 0 Bass
+            tracks.rhythmGuitar,            // 1 Guitar
+            lhNotes,                        // 2 Piano LH
+            rhNotes,                        // 3 Piano RH
+            tracks.pads,                    // 4 Pads
+            tracks.leadMelody,              // 5 Lead
+            tracks.counterMelody,           // 6 Counter
+            emptyList<String>(),            // 7 Kick (no pitched roll)
+            emptyList<String>(),            // 8 Snare
+            emptyList<String>(),            // 9 HiHat
+            emptyList<String>()             // 10 Crash
         )
         trackRolls.forEachIndexed { i, roll ->
             roll.setNotes(allTrackNotes.getOrElse(i) { emptyList() }, chordEngine2)
