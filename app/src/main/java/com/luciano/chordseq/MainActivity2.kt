@@ -51,8 +51,13 @@ class MainActivity2 : AppCompatActivity() {
     private var currentChords             = listOf<String>()
     private var currentTracks             : ChordDeriver.TrackResult? = null
     private var barsPerChord              = 2
-    private lateinit var exportBtn         : TextView
-    private lateinit var exportSection     : View
+    private lateinit var exportBtn          : TextView
+    private lateinit var exportSection      : View
+
+    // Per-track mini rolls and play buttons
+    private val trackRolls   = mutableListOf<TrackMiniRollView>()
+    private var playAllJob   : kotlinx.coroutines.Job? = null
+    private var chordEngine2 : ChordEngine? = null
     private lateinit var tracksSection   : LinearLayout
 
     // 7-track TextViews
@@ -93,6 +98,8 @@ class MainActivity2 : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         chordSeqRunner.close()
+        chordEngine2?.close()
+        playAllJob?.cancel()
     }
 
     override fun onRequestPermissionsResult(
@@ -345,10 +352,25 @@ class MainActivity2 : AppCompatActivity() {
 
 
     private fun buildTracksSection(): View {
-        val col = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
+        // ── Play All button ───────────────────────────────────────────────────
+        val playAllRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(14), dp(10), dp(14), dp(6))
+            gravity = Gravity.CENTER_VERTICAL
         }
-        col.addView(secLabel("④ instrument tracks"))
+        playAllRow.addView(secLabel("④ instrument tracks").apply {
+            setPadding(0, 0, 0, 0)
+        }, lp(0, WRAP) { weight = 1f })
+        playAllRow.addView(TextView(this).apply {
+            text = "▶ Play All"; textSize = 11f; gravity = Gravity.CENTER
+            setTypeface(null, Typeface.BOLD); setTextColor(C.PURPLE_LITE)
+            setBackgroundColor(C.PURPLE)
+            setPadding(dp(14), dp(7), dp(14), dp(7))
+            setOnClickListener { onPlayAllClicked() }
+        })
+        col.addView(playAllRow)
 
         val instruments = listOf(
             "Bass"           to "root · oct 2",
@@ -364,7 +386,9 @@ class MainActivity2 : AppCompatActivity() {
             C.SLOTS[0], C.SLOTS[1], C.SLOTS[2]
         )
 
+        trackRolls.clear()
         val tvRefs = mutableListOf<TextView>()
+
         instruments.forEachIndexed { i, (name, rule) ->
             val cols = colors[i]
             val card = LinearLayout(this).apply {
@@ -372,6 +396,8 @@ class MainActivity2 : AppCompatActivity() {
                 setBackgroundColor(cols[0])
                 setPadding(dp(12), dp(10), dp(12), dp(10))
             }
+
+            // Header row: name + rule + play button
             val header = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             }
@@ -382,19 +408,37 @@ class MainActivity2 : AppCompatActivity() {
             header.addView(TextView(this).apply {
                 text = rule; textSize = 9f; setTextColor(cols[2])
             })
+            val trackIdx = i
+            header.addView(TextView(this).apply {
+                text = "  ▶"; textSize = 12f; setTextColor(cols[3])
+                setPadding(dp(8), dp(2), 0, dp(2))
+                setOnClickListener { onPlayTrackClicked(trackIdx) }
+            })
             card.addView(header)
+
+            // Accent bar
             card.addView(View(this).apply {
                 setBackgroundColor(cols[3])
                 layoutParams = LinearLayout.LayoutParams(MATCH, dp(2)).apply {
                     topMargin = dp(5); bottomMargin = dp(5)
                 }
             })
+
+            // Text output (chord names)
             val tv = TextView(this).apply {
                 text = "—"; textSize = 11f; setTextColor(cols[1])
                 typeface = Typeface.MONOSPACE; alpha = 0.5f
             }
             card.addView(tv)
             tvRefs.add(tv)
+
+            // Mini piano roll
+            val roll = TrackMiniRollView(this, cols[3])
+            trackRolls.add(roll)
+            card.addView(roll, LinearLayout.LayoutParams(MATCH, dp(60)).apply {
+                topMargin = dp(6)
+            })
+
             col.addView(card, lp(MATCH, WRAP) { setMargins(dp(14), 0, dp(14), dp(6)) })
         }
 
@@ -404,6 +448,67 @@ class MainActivity2 : AppCompatActivity() {
         tracksSection  = col
         col.visibility = View.GONE
         return col
+    }
+
+    // ── Track playback ────────────────────────────────────────────────────────
+
+    private fun onPlayTrackClicked(trackIdx: Int) {
+        val tracks = currentTracks ?: return
+        val notesList: List<String> = when (trackIdx) {
+            0 -> tracks.bass
+            1 -> tracks.rhythmGuitar
+            2 -> tracks.piano.map { it.substringAfter("LH:").substringBefore(" ").split("+").first() }
+            3 -> tracks.pads
+            4 -> tracks.leadMelody
+            5 -> tracks.counterMelody
+            else -> return   // percussion — no pitched notes
+        }
+        lifecycleScope.launch {
+            notesList.forEachIndexed { ci, noteName ->
+                trackRolls.getOrNull(trackIdx)?.highlightChord(ci)
+                val midi = MidiExporter.noteNameToMidi(noteName.trim()) ?: return@forEachIndexed
+                PianoSynth.playChord(listOf(midi), durationMs = 1400)
+                kotlinx.coroutines.delay(1700)
+            }
+            trackRolls.getOrNull(trackIdx)?.highlightChord(-1)
+        }
+    }
+
+    private fun onPlayAllClicked() {
+        val tracks = currentTracks ?: return
+        playAllJob?.cancel()
+        playAllJob = lifecycleScope.launch {
+            // Build per-chord combined MIDI note lists (all tracks together)
+            val chordCount = currentChords.size
+            for (ci in 0 until chordCount) {
+                // Highlight all rolls at this chord position
+                trackRolls.forEach { it.highlightChord(ci) }
+
+                // Gather all pitched notes from all tracks for this chord
+                val allNotes = mutableListOf<Int>()
+                listOf(
+                    tracks.bass.getOrNull(ci),
+                    tracks.rhythmGuitar.getOrNull(ci),
+                    tracks.leadMelody.getOrNull(ci),
+                    tracks.counterMelody.getOrNull(ci),
+                    tracks.pads.getOrNull(ci)
+                ).forEach { name ->
+                    if (name != null) MidiExporter.noteNameToMidi(name.trim())?.let { allNotes.add(it) }
+                }
+
+                // Also add piano LH root note
+                tracks.piano.getOrNull(ci)?.let { pianoStr ->
+                    val lhRoot = pianoStr.substringAfter("LH:").substringBefore("+").trim()
+                    MidiExporter.noteNameToMidi(lhRoot)?.let { allNotes.add(it) }
+                }
+
+                if (allNotes.isNotEmpty()) {
+                    PianoSynth.playChord(allNotes.distinct(), durationMs = 1400)
+                }
+                kotlinx.coroutines.delay(1700)
+            }
+            trackRolls.forEach { it.highlightChord(-1) }
+        }
     }
 
     // ── Recording ─────────────────────────────────────────────────────────────
@@ -510,6 +615,18 @@ class MainActivity2 : AppCompatActivity() {
         tvPercussion.text   = tracks.percussion.joinToString("\n")
         listOf(tvBass,tvRhythmGuitar,tvPiano,tvPads,tvLead,tvCounter,tvPercussion)
             .forEach { it.alpha = 1f }
+
+        // Feed mini rolls
+        val allTrackNotes = listOf(
+            tracks.bass, tracks.rhythmGuitar,
+            tracks.piano.map { it.substringAfter("LH:").substringBefore(" ").split("+").first() },
+            tracks.pads, tracks.leadMelody, tracks.counterMelody,
+            tracks.percussion  // percussion shows text pattern, roll stays empty
+        )
+        trackRolls.forEachIndexed { i, roll ->
+            roll.setNotes(allTrackNotes.getOrElse(i) { emptyList() }, chordEngine2)
+        }
+
         tracksSection.visibility = View.VISIBLE
     }
 
@@ -735,5 +852,110 @@ class PianoKeySelectorView(
         val idx = (x/kW).toInt().coerceIn(0,6)
         selectedKey = whiteNotes[idx]; onKeySelected(selectedKey); invalidate()
         return true
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  TrackMiniRollView — compact piano roll per instrument track
+//  Shows 4 chord note blocks, highlights the active chord during playback
+// ─────────────────────────────────────────────────────────────────────────────
+class TrackMiniRollView(
+    context: android.content.Context,
+    private val accentColor: Int
+) : android.view.View(context) {
+
+    private var noteNames   : List<String>   = emptyList()
+    private var engine      : ChordEngine?   = null
+    private var activeChord : Int            = -1
+
+    // Row layout: 13 semitones C4–C5
+    private val ROWS       = 13
+    private val keyIsBlack = listOf(false,true,false,true,false,true,false,false,true,false,true,false,false)
+    private val midiToRow  = mapOf(
+        60 to 0, 59 to 1, 58 to 2, 57 to 3, 56 to 4, 55 to 5,
+        53 to 6, 52 to 7, 51 to 8, 50 to 9, 49 to 10, 48 to 11, 47 to 12
+    )
+
+    private val bgPaint   = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+    private val notePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        style = android.graphics.Paint.Style.FILL
+    }
+    private val linePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        style = android.graphics.Paint.Style.STROKE; strokeWidth = 0.5f
+    }
+    private val phPaint   = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = C.ORANGE; style = android.graphics.Paint.Style.FILL
+    }
+
+    fun setNotes(names: List<String>, eng: ChordEngine?) {
+        noteNames = names; engine = eng; invalidate()
+    }
+
+    fun highlightChord(idx: Int) { activeChord = idx; invalidate() }
+
+    override fun onDraw(canvas: android.graphics.Canvas) {
+        val w = width.toFloat(); val h = height.toFloat()
+        val rowH = h / ROWS
+
+        // Row backgrounds
+        keyIsBlack.forEachIndexed { i, black ->
+            bgPaint.color = if (black) android.graphics.Color.parseColor("#0D0D18")
+            else android.graphics.Color.parseColor("#111120")
+            canvas.drawRect(0f, i * rowH, w, (i+1) * rowH, bgPaint)
+        }
+
+        // Column dividers
+        if (noteNames.isNotEmpty()) {
+            val slotW = w / noteNames.size
+            linePaint.color = android.graphics.Color.parseColor("#2A2A3E")
+            for (i in 1 until noteNames.size) {
+                canvas.drawLine(i * slotW, 0f, i * slotW, h, linePaint)
+            }
+        }
+
+        if (noteNames.isEmpty()) return
+
+        val slotW = w / noteNames.size.coerceAtLeast(1)
+
+        noteNames.forEachIndexed { ci, noteName ->
+            val isActive = ci == activeChord
+            val nx = ci * slotW + 2f
+            val nw = slotW - 4f
+
+            // Try to get MIDI from chord name via engine, else parse note name directly
+            val midiList: List<Int> = if (engine != null) {
+                engine!!.notesForChord(noteName).filter { it in 47..60 }.ifEmpty {
+                    MidiExporter.noteNameToMidi(noteName.trim())?.let { listOf(it) } ?: emptyList()
+                }
+            } else {
+                MidiExporter.noteNameToMidi(noteName.trim())?.let { listOf(it) } ?: emptyList()
+            }
+
+            val displayRows = midiList.mapNotNull { midiToRow[it] }.ifEmpty {
+                listOf(6) // middle row as fallback
+            }
+
+            displayRows.forEachIndexed { ni, row ->
+                notePaint.color = accentColor
+                notePaint.alpha = when {
+                    isActive && ni == 0 -> 255
+                    isActive            -> 160
+                    ni == 0             -> 200
+                    else                -> 120
+                }
+                val y = row * rowH + 1f
+                canvas.drawRoundRect(nx, y, nx + nw, y + rowH - 1f, 2f, 2f, notePaint)
+            }
+        }
+        notePaint.alpha = 255
+
+        // Playhead on active chord
+        if (activeChord >= 0 && noteNames.isNotEmpty()) {
+            val slotW2 = w / noteNames.size
+            val px = activeChord * slotW2 + slotW2 * 0.5f
+            phPaint.style = android.graphics.Paint.Style.STROKE
+            val ph = android.graphics.Paint(phPaint).apply { strokeWidth = 2f }
+            canvas.drawLine(px, 0f, px, h, ph)
+        }
     }
 }
