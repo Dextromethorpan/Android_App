@@ -435,7 +435,7 @@ class MainActivity2 : AppCompatActivity() {
             // Mini piano roll
             val roll = TrackMiniRollView(this, cols[3])
             trackRolls.add(roll)
-            card.addView(roll, LinearLayout.LayoutParams(MATCH, dp(60)).apply {
+            card.addView(roll, LinearLayout.LayoutParams(MATCH, dp(120)).apply {
                 topMargin = dp(6)
             })
 
@@ -856,35 +856,39 @@ class PianoKeySelectorView(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  TrackMiniRollView — compact piano roll per instrument track
-//  Shows 4 chord note blocks, highlights the active chord during playback
+//  TrackMiniRollView — full App 1 style piano roll per instrument track
 // ─────────────────────────────────────────────────────────────────────────────
 class TrackMiniRollView(
     context: android.content.Context,
     private val accentColor: Int
 ) : android.view.View(context) {
 
-    private var noteNames   : List<String>   = emptyList()
-    private var engine      : ChordEngine?   = null
-    private var activeChord : Int            = -1
+    private var noteNames   : List<String> = emptyList()
+    private var engine      : ChordEngine? = null
+    private var activeChord : Int          = -1
 
-    // Row layout: 13 semitones C4–C5
-    private val ROWS       = 13
-    private val keyIsBlack = listOf(false,true,false,true,false,true,false,false,true,false,true,false,false)
+    private val keyLabels  = listOf("C5","","B4","","A4","","G4","F4","","E4","","D4","","C4")
+    private val keyIsBlack = listOf(false,true,false,true,false,true,false,false,true,false,true,false,true,false)
     private val midiToRow  = mapOf(
-        60 to 0, 59 to 1, 58 to 2, 57 to 3, 56 to 4, 55 to 5,
-        53 to 6, 52 to 7, 51 to 8, 50 to 9, 49 to 10, 48 to 11, 47 to 12
+        60 to 0, 59 to 2, 58 to 3, 57 to 4, 56 to 5, 55 to 6,
+        53 to 7, 52 to 9, 51 to 10, 50 to 11, 49 to 12, 48 to 13
     )
 
+    private val KEY_W     = 44f
+    private val ROWS      = 14
+
     private val bgPaint   = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
-    private val notePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        style = android.graphics.Paint.Style.FILL
+    private val notePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { style = android.graphics.Paint.Style.FILL }
+    private val linePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { style = android.graphics.Paint.Style.STROKE }
+    private val txtPaint  = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.parseColor("#333352")
+        textAlign = android.graphics.Paint.Align.LEFT
     }
-    private val linePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        style = android.graphics.Paint.Style.STROKE; strokeWidth = 0.5f
+    private val lblPaint  = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = android.graphics.Paint.Align.LEFT
     }
     private val phPaint   = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        color = C.ORANGE; style = android.graphics.Paint.Style.FILL
+        color = C.ORANGE
     }
 
     fun setNotes(names: List<String>, eng: ChordEngine?) {
@@ -894,68 +898,136 @@ class TrackMiniRollView(
     fun highlightChord(idx: Int) { activeChord = idx; invalidate() }
 
     override fun onDraw(canvas: android.graphics.Canvas) {
-        val w = width.toFloat(); val h = height.toFloat()
-        val rowH = h / ROWS
+        val w    = width.toFloat()
+        val h    = height.toFloat()
+        val gridW = w - KEY_W
+        val rowH  = h / ROWS
 
-        // Row backgrounds
-        keyIsBlack.forEachIndexed { i, black ->
-            bgPaint.color = if (black) android.graphics.Color.parseColor("#0D0D18")
+        // Key label font size proportional to row height
+        val fontSize = (rowH * 0.65f).coerceIn(10f, 18f)
+        txtPaint.textSize = fontSize
+
+        // ── Row backgrounds ───────────────────────────────────────────────────
+        keyLabels.forEachIndexed { i, _ ->
+            bgPaint.color = if (keyIsBlack[i]) android.graphics.Color.parseColor("#0D0D18")
             else android.graphics.Color.parseColor("#111120")
             canvas.drawRect(0f, i * rowH, w, (i+1) * rowH, bgPaint)
         }
 
-        // Column dividers
+        // ── Key / grid separator ──────────────────────────────────────────────
+        linePaint.color = android.graphics.Color.parseColor("#363650")
+        linePaint.strokeWidth = 1.5f
+        canvas.drawLine(KEY_W, 0f, KEY_W, h, linePaint)
+
+        // ── Column dividers + sub-beat lines ──────────────────────────────────
         if (noteNames.isNotEmpty()) {
-            val slotW = w / noteNames.size
-            linePaint.color = android.graphics.Color.parseColor("#2A2A3E")
-            for (i in 1 until noteNames.size) {
-                canvas.drawLine(i * slotW, 0f, i * slotW, h, linePaint)
+            val slotW = gridW / noteNames.size
+            for (ci in 0 until noteNames.size) {
+                // Chord column border
+                if (ci > 0) {
+                    linePaint.color = android.graphics.Color.parseColor("#363650")
+                    linePaint.strokeWidth = 1.5f
+                    canvas.drawLine(KEY_W + ci * slotW, 0f, KEY_W + ci * slotW, h, linePaint)
+                }
+                // Sub-beat lines (4 per chord)
+                linePaint.color = android.graphics.Color.parseColor("#1E1E2E")
+                linePaint.strokeWidth = 0.5f
+                for (b in 1..3) {
+                    val x = KEY_W + ci * slotW + slotW * b / 4f
+                    canvas.drawLine(x, 0f, x, h, linePaint)
+                }
             }
         }
 
-        if (noteNames.isEmpty()) return
+        // ── Row dividers on key side ──────────────────────────────────────────
+        linePaint.color = android.graphics.Color.parseColor("#1A1A2A")
+        linePaint.strokeWidth = 0.5f
+        keyLabels.indices.forEach { i ->
+            canvas.drawLine(0f, i * rowH, KEY_W, i * rowH, linePaint)
+        }
 
-        val slotW = w / noteNames.size.coerceAtLeast(1)
+        // ── Key labels ────────────────────────────────────────────────────────
+        keyLabels.forEachIndexed { i, label ->
+            if (label.isNotEmpty()) {
+                canvas.drawText(label, 3f, i * rowH + rowH * 0.72f, txtPaint)
+            }
+        }
 
+        // ── Chord name labels at top ──────────────────────────────────────────
+        if (noteNames.isNotEmpty()) {
+            val slotW = gridW / noteNames.size
+            lblPaint.textSize = (fontSize * 0.85f).coerceIn(9f, 16f)
+            lblPaint.color = accentColor
+            noteNames.forEachIndexed { ci, name ->
+                canvas.drawText(name, KEY_W + ci * slotW + 4f, rowH * 0.85f, lblPaint)
+            }
+        }
+
+        // ── Notes ─────────────────────────────────────────────────────────────
+        if (noteNames.isEmpty()) {
+            // Ghost placeholder
+            notePaint.color = android.graphics.Color.parseColor("#222238")
+            notePaint.alpha = 80
+            val pw = gridW / 4f * 0.82f
+            listOf(9 to 0, 5 to 0, 13 to 1, 6 to 1, 7 to 2, 9 to 2, 4 to 3, 11 to 3).forEach { (row, slot) ->
+                val x = KEY_W + slot * (gridW / 4f) + 4f
+                val y = row * rowH + 1f
+                canvas.drawRoundRect(x, y, x + pw, y + rowH - 2f, 3f, 3f, notePaint)
+            }
+            notePaint.alpha = 255
+            return
+        }
+
+        val slotW = gridW / noteNames.size
         noteNames.forEachIndexed { ci, noteName ->
             val isActive = ci == activeChord
-            val nx = ci * slotW + 2f
-            val nw = slotW - 4f
+            val nx = KEY_W + ci * slotW + 3f
+            val nw = slotW * 0.84f
 
-            // Try to get MIDI from chord name via engine, else parse note name directly
-            val midiList: List<Int> = if (engine != null) {
-                engine!!.notesForChord(noteName).filter { it in 47..60 }.ifEmpty {
-                    MidiExporter.noteNameToMidi(noteName.trim())?.let { listOf(it) } ?: emptyList()
-                }
-            } else {
-                MidiExporter.noteNameToMidi(noteName.trim())?.let { listOf(it) } ?: emptyList()
-            }
+            // Get MIDI notes — try chord engine first, then parse as note name
+            val midiList: List<Int> = engine?.notesForChord(noteName)
+                ?.filter { it in 48..60 }
+                ?.takeIf { it.isNotEmpty() }
+                ?: MidiExporter.noteNameToMidi(noteName.trim())
+                    ?.takeIf { it in 48..60 }
+                    ?.let { listOf(it) }
+                ?: listOf(53) // fallback: F4
 
-            val displayRows = midiList.mapNotNull { midiToRow[it] }.ifEmpty {
-                listOf(6) // middle row as fallback
-            }
+            val displayRows = midiList.mapNotNull { midiToRow[it] }
+                .ifEmpty { listOf(6) }
 
             displayRows.forEachIndexed { ni, row ->
                 notePaint.color = accentColor
                 notePaint.alpha = when {
                     isActive && ni == 0 -> 255
                     isActive            -> 160
-                    ni == 0             -> 200
-                    else                -> 120
+                    ni == 0             -> 220
+                    else                -> 130
                 }
                 val y = row * rowH + 1f
-                canvas.drawRoundRect(nx, y, nx + nw, y + rowH - 1f, 2f, 2f, notePaint)
+                canvas.drawRoundRect(nx, y, nx + nw, y + rowH - 2f, 3f, 3f, notePaint)
+
+                // Subtle highlight on top of note
+                if (ni == 0) {
+                    notePaint.color = android.graphics.Color.WHITE
+                    notePaint.alpha = 40
+                    canvas.drawRoundRect(nx, y, nx + nw, y + rowH * 0.3f, 3f, 3f, notePaint)
+                }
             }
         }
         notePaint.alpha = 255
 
-        // Playhead on active chord
+        // ── Playhead ──────────────────────────────────────────────────────────
         if (activeChord >= 0 && noteNames.isNotEmpty()) {
-            val slotW2 = w / noteNames.size
-            val px = activeChord * slotW2 + slotW2 * 0.5f
+            val slotW2 = gridW / noteNames.size
+            val px = KEY_W + activeChord * slotW2 + slotW2 * 0.5f
             phPaint.style = android.graphics.Paint.Style.STROKE
-            val ph = android.graphics.Paint(phPaint).apply { strokeWidth = 2f }
-            canvas.drawLine(px, 0f, px, h, ph)
+            phPaint.strokeWidth = 2.5f
+            canvas.drawLine(px, 0f, px, h, phPaint)
+            phPaint.style = android.graphics.Paint.Style.FILL
+            canvas.drawPath(android.graphics.Path().apply {
+                moveTo(px - 6f, 0f); lineTo(px + 6f, 0f); lineTo(px, 10f); close()
+            }, phPaint)
         }
     }
 }
