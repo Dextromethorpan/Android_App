@@ -1,27 +1,65 @@
-# Gradle
-.gradle/
-caches/
+# ═══════════════════════════════════════════════════════════════════════════════
+#  ChordsPro — .gitignore
+#  Android_App · Luciano Muratore
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+#  NEW CONTRIBUTOR SETUP INSTRUCTIONS
+#  ────────────────────────────────────────────────────────────────────────────
+#  After cloning this repo, you need ONE file that is not tracked by Git:
+#
+#  local.properties — tells Gradle where your Android SDK is installed.
+#
+#  HOW TO GET IT:
+#    Option A (recommended): Open the project in Android Studio.
+#                            It creates local.properties automatically.
+#
+#    Option B (manual): Create a file called local.properties in the
+#                       project root with this content:
+#
+#                       On Windows:
+#                         sdk.dir=C\:\\Users\\YourName\\AppData\\Local\\Android\\Sdk
+#
+#                       On Mac:
+#                         sdk.dir=/Users/YourName/Library/Android/sdk
+#
+#                       On Linux:
+#                         sdk.dir=/home/YourName/Android/Sdk
+#
+#  Replace YourName with your actual username.
+#
+#  Once local.properties exists, run:
+#    ./gradlew installDebug
+#
+#  The first build downloads Gradle and all dependencies automatically.
+#  This takes 5-10 minutes. Subsequent builds are fast.
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# Build outputs
-build/
-*/build/
-
-# Local config
+# Android SDK location — generated per machine, never commit this
 local.properties
 
-# IDE
-.idea/
-*.iml
-
-# OS
-.DS_Store
-
-# Native
-.externalNativeBuild/
-.cxx/
-wrapper/dists/
-daemon/
-.gradle/
+# Gradle build outputs
 build/
-*.log
+.gradle/
+
+# Gradle distribution cache — downloaded automatically on first build
+wrapper/dists/
+gradle/wrapper/dists/
+
+# Gradle daemon logs
+daemon/
+.gradle/daemon/
+
+# Kotlin build profile
 kotlin-profile/
+
+# Android Studio project files
+*.iml
+.idea/
+*.hprof
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
