@@ -19,3 +19,9 @@ local.properties
 # Native
 .externalNativeBuild/
 .cxx/
+wrapper/dists/
+daemon/
+.gradle/
+build/
+*.log
+kotlin-profile/
